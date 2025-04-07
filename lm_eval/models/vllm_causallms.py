@@ -1,5 +1,4 @@
 import copy
-import logging
 from importlib.metadata import version
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
@@ -11,13 +10,9 @@ from tqdm import tqdm
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
 from lm_eval.api.registry import register_model
-from lm_eval.models.utils import (
-    Collator,
-    configure_pad_token,
-    handle_stop_sequences,
-    undistribute,
-)
+from lm_eval.models.utils import Collator, configure_pad_token, undistribute
 from lm_eval.utils import (
+    eval_logger,
     get_rolling_token_windows,
     make_disjoint_window,
 )
@@ -34,7 +29,7 @@ except ModuleNotFoundError:
 if TYPE_CHECKING:
     pass
 
-eval_logger = logging.getLogger(__name__)
+eval_logger = eval_logger
 
 
 @register_model("vllm")
@@ -70,14 +65,15 @@ class VLLM(TemplateLM):
         super().__init__()
 
         if not find_spec("vllm"):
-            raise ModuleNotFoundError(
+            raise Exception(
                 "attempted to use 'vllm' LM type, but package `vllm` is not installed. "
                 "Please install vllm via `pip install lm-eval[vllm]` or `pip install -e .[vllm]`"
             )
 
-        assert max_length is None or max_model_len is None, (
-            "Either max_length or max_model_len may be provided, but not both"
-        )
+        assert "cuda" in device or device is None, "vLLM only supports CUDA"
+        assert (
+            max_length is None or max_model_len is None
+        ), "Either max_length or max_model_len may be provided, but not both"
 
         self._max_length = max_model_len if max_model_len is not None else max_length
         self.tensor_parallel_size = int(tensor_parallel_size)
@@ -101,7 +97,7 @@ class VLLM(TemplateLM):
         self.batch_size = (
             "auto"
             if isinstance(batch_size, str) and "auto" in batch_size
-            else int(batch_size)
+            else batch_size
         )
         if self.data_parallel_size <= 1:
             self.model = LLM(**self.model_args)
@@ -109,23 +105,22 @@ class VLLM(TemplateLM):
             eval_logger.warning(
                 "You might experience occasional issues with model weight downloading when data_parallel is in use. To ensure stable performance, run with data_parallel_size=1 until the weights are downloaded and cached."
             )
-            self.model_args["distributed_executor_backend"] = "ray"
+            self.model_args["worker_use_ray"] = True
             self.batch_size = "auto"
             eval_logger.info("Manual batching is not compatible with data parallelism.")
 
-        from transformers import AutoConfig
+            from transformers import AutoConfig
 
-        self._config = AutoConfig.from_pretrained(
-            pretrained, trust_remote_code=trust_remote_code, revision=revision
-        )
+            self._config = AutoConfig.from_pretrained(
+                pretrained, trust_remote_code=trust_remote_code, revision=revision
+            )
         self.tokenizer = get_tokenizer(
             tokenizer if tokenizer else pretrained,
             tokenizer_mode=tokenizer_mode,
             trust_remote_code=trust_remote_code,
-            revision=tokenizer_revision,
-            add_bos_token=add_bos_token,
+            tokenizer_revision=tokenizer_revision,
         )
-        self.tokenizer = configure_pad_token(self.tokenizer, model_config=self._config)
+        self.tokenizer = configure_pad_token(self.tokenizer)
         self.add_bos_token = add_bos_token
         if "gemma" in pretrained.lower():
             self.add_bos_token = True
@@ -142,9 +137,9 @@ class VLLM(TemplateLM):
         self._max_gen_toks = max_gen_toks
 
         if lora_local_path is not None:
-            assert parse_version(version("vllm")) > parse_version("0.3.0"), (
-                "lora adapters only compatible with vllm > v0.3.0."
-            )
+            assert parse_version(version("vllm")) > parse_version(
+                "0.3.0"
+            ), "lora adapters only compatible with vllm > v0.3.0."
             self.lora_request = LoRARequest("finetuned", 1, lora_local_path)
         else:
             self.lora_request = None
@@ -184,20 +179,13 @@ class VLLM(TemplateLM):
     def max_gen_toks(self):
         return self._max_gen_toks
 
-    def apply_chat_template(
-        self, chat_history: List[Dict[str, str]], add_generation_prompt: bool = True
-    ) -> str:
+    def apply_chat_template(self, chat_history: List[Dict[str, str]]) -> str:
         """
         Method to apply a chat template to a list of chat history between user and model.
         """
-        chat_templated = self.tokenizer.apply_chat_template(
-            chat_history,
-            tokenize=False,
-            add_generation_prompt=add_generation_prompt,
-            continue_final_message=not add_generation_prompt,
+        return self.tokenizer.apply_chat_template(
+            chat_history, tokenize=False, add_generation_prompt=True
         )
-
-        return chat_templated
 
     @property
     def tokenizer_name(self) -> str:
@@ -238,36 +226,163 @@ class VLLM(TemplateLM):
     ):
         if generate:
             kwargs = self.modify_gen_kwargs(kwargs)
+
+            outputs_thinking = None
+            if any(["thinking" in k for k in kwargs]):
+                print("Separating thinking and answering generation.")
+                thinking_start = kwargs.pop("thinking_start", "<|im_start|>think")
+                thinking_end = kwargs.pop("thinking_end", "<|im_start|>answer")
+                thinking_n_ignore = kwargs.pop("thinking_n_ignore", None)
+                thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str", None) # e.g. "Let me double check step-by-step.")
+                if thinking_n_ignore_str is not None:
+                    print(f"Thinking ignore string: {thinking_n_ignore_str}")
+                    thinking_n_ignore_str_tok = self.tok_encode(thinking_n_ignore_str)
+                until_thinking = [kwargs.pop("until_thinking", "<|im_start|>")]
+                if "until_thinking_2" in kwargs:
+                    until_thinking.append(kwargs.pop("until_thinking_2"))
+                if stop is not None:
+                    until_thinking.extend(stop)
+                print(f"Thinking start: {thinking_start}, Thinking end: {thinking_end}, Stop: {until_thinking}")
+                thinking_start_tok = self.tok_encode(thinking_start)
+                thinking_end_tok = self.tok_encode(thinking_end)
+                thinking_end_max = thinking_end + "\nAnswer:"
+                thinking_end_max_tok = self.tok_encode(thinking_end_max)
+                newline_tok = self.tok_encode("\n")
+                # Cast to list to avoid `dictionary changed size during iteration`
+                sampling_params_thinking = {k.replace("_thinking", ""): kwargs.pop(k) for k, v in list(kwargs.items()) if "thinking" in k}
+                # Add all other kwargs but keep sampling_params_thinking version if duplicate key
+                sampling_params_thinking = {**kwargs, **sampling_params_thinking}
+                if "max_tokens" in sampling_params_thinking:
+                    if sampling_params_thinking["max_tokens"] == "auto":
+                        # Leave 100 tokens for answer
+                        sampling_params_thinking["max_tokens"] = max_tokens - max([len(x) for x in requests]) - len(thinking_start_tok) - len(thinking_end_max_tok) - 100
+                        print(f"Auto setting max_tokens_thinking to {sampling_params_thinking['max_tokens']}")
+                    else:
+                        sampling_params_thinking["max_tokens"] = int(sampling_params_thinking["max_tokens"])
+                else:
+                    sampling_params_thinking["max_tokens"] = max_tokens
+                until_thinking_tok = self.tok_encode(until_thinking)
+                if ("min_tokens" in sampling_params_thinking) or (thinking_n_ignore is not None):
+                    if thinking_n_ignore is not None:
+                        sampling_params_thinking["min_tokens"] = 1
+                    else:
+                        sampling_params_thinking["min_tokens"] = int(sampling_params_thinking["min_tokens"])
+                    assert all([len(x) == 1 for x in until_thinking_tok]), "min_tokens_thinking only supports until_thinking tokens that are 1 token long"
+                    # min_tokens will not ignore `stop`, only `stop_token_ids` are ignored so need to use these
+                    sampling_params_thinking["stop_token_ids"] = [x[0] for x in until_thinking_tok]
+                else:
+                    sampling_params_thinking["stop"] = until_thinking
+                requests = [req + thinking_start_tok for req in requests]
+                sampling_params = SamplingParams(**sampling_params_thinking)
+
+            
+                if thinking_n_ignore is not None:
+                    print("Will ignore end of thinking " + str(thinking_n_ignore) + " times.")
+                    # Add 1 to account for first generation w/o ignoring
+                    thinking_n_ignore = int(thinking_n_ignore) + 1
+                    outputs_thinking = [None] * len(requests)
+                    requests_tmp = copy.deepcopy(requests)
+                    indices = list(range(len(requests)))
+                    for i in range(thinking_n_ignore):
+                        outputs_tmp = self.model.generate(
+                            prompt_token_ids=requests_tmp,
+                            sampling_params=sampling_params,
+                            use_tqdm=True if self.batch_size == "auto" else False,
+                            lora_request=self.lora_request if self.lora_request is not None else None
+                        )
+                        indices_new = []
+                        requests_tmp_new = []
+                        for j, o in enumerate(outputs_tmp):
+                            idx = indices[j]
+                            assert len(o.outputs) == 1
+                            cont = list(o.outputs[0].token_ids)
+                            # Final; do not generate further
+                            if (o.outputs[0].finish_reason == "length") or (i == thinking_n_ignore - 1):
+                                if outputs_thinking[idx] is not None:
+                                    outputs_thinking[idx].outputs[0].text += o.outputs[0].text
+                                    outputs_thinking[idx].outputs[0].token_ids += cont
+                                    outputs_thinking[idx].outputs[0].finish_reason = o.outputs[0].finish_reason
+                                else:
+                                    outputs_thinking[idx] = o
+                                    outputs_thinking[idx].outputs[0].token_ids = cont
+                                    outputs_thinking[idx].outputs[0].finish_reason = o.outputs[0].finish_reason
+                            else:
+                                # When using `stop`, the stop text will not be in the text, but still in the token_ids so remove it
+                                for toks in until_thinking_tok:
+                                    if cont[-len(toks):] == toks:
+                                        cont = cont[:-len(toks)]
+                                
+                                if thinking_n_ignore_str is not None:
+                                    cont += thinking_n_ignore_str_tok
+                                    o.outputs[0].text += thinking_n_ignore_str
+
+                                if outputs_thinking[idx] is not None:
+                                    outputs_thinking[idx].outputs[0].text += o.outputs[0].text
+                                    outputs_thinking[idx].outputs[0].token_ids += cont
+                                else:
+                                    outputs_thinking[idx] = o
+                                    outputs_thinking[idx].outputs[0].token_ids = cont
+
+                                requests_tmp_new.append(requests_tmp[j] + cont)
+                                indices_new.append(idx)
+                        requests_tmp = requests_tmp_new
+                        indices = indices_new
+                    for idx in list(range(len(requests))):
+                        if len(outputs_thinking[idx].outputs[0].token_ids) > sampling_params_thinking["max_tokens"]:
+                            print(f'Warning: Generated more than {sampling_params_thinking["max_tokens"]} tokens. Cutting.')
+                            outputs_thinking[idx].outputs[0].token_ids = outputs_thinking[idx].outputs[0].token_ids[:sampling_params_thinking["max_tokens"]]
+
+                else:
+                    outputs_thinking = self.model.generate(
+                        prompt_token_ids=requests,
+                        sampling_params=sampling_params,
+                        lora_request=self.lora_request if self.lora_request is not None else None
+                    )
+
+                for i, o in enumerate(outputs_thinking):
+                    assert len(o.outputs) == 1
+                    cont = list(o.outputs[0].token_ids)
+                    # When using `stop`, the stop text will not be in the text, but still in the token_ids so remove it
+                    for toks in until_thinking_tok:
+                        if cont[-len(toks):] == toks:
+                            cont = cont[:-len(toks)]
+
+                    if o.outputs[0].finish_reason == "length":
+                        # \n appears a lot so a decent chance it happend to just be the last token in which case we don't need to add a newline
+                        if (o.outputs[0].text[-1] == "\n") or (thinking_start[0] == "\n"):
+                            requests[i] += cont + thinking_end_max_tok
+                            outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end_max
+                        else:
+                            requests[i] += cont + newline_tok + thinking_end_max_tok
+                            outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + "\n" + thinking_end_max
+                    else:
+                        requests[i] += cont + thinking_end_tok
+                        outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end
+
             sampling_params = SamplingParams(max_tokens=max_tokens, stop=stop, **kwargs)
         else:
             sampling_params = SamplingParams(
                 temperature=0, prompt_logprobs=1, max_tokens=1, detokenize=False
             )
         if self.data_parallel_size > 1:
-            # vLLM hangs if resources are set in ray.remote
+            # vLLM hangs if tensor_parallel > 1 and resources are set in ray.remote
             # also seems to only work with decorator and not with ray.remote() fn
             # see https://github.com/vllm-project/vllm/issues/973
+            # note: this has changed on 0.3.3, and it only works now if num_gpus are set.
+            # but then tensor_parallel breaks
             @ray.remote
             def run_inference_one_model(
-                model_args: dict,
-                sampling_params: SamplingParams,
-                requests: List[List[int]],
-                lora_request: LoRARequest,
+                model_args: dict, sampling_params, requests: List[List[int]]
             ):
                 llm = LLM(**model_args)
                 return llm.generate(
-                    prompt_token_ids=requests,
-                    sampling_params=sampling_params,
-                    lora_request=lora_request,
+                    prompt_token_ids=requests, sampling_params=sampling_params
                 )
 
             # dispatch requests to all self.data_parallel_size workers, in interleaved fashion
             # interleaved important to balance context lengths across workers
             requests = [list(x) for x in distribute(self.data_parallel_size, requests)]
-            inputs = (
-                (self.model_args, sampling_params, req, self.lora_request)
-                for req in requests
-            )
+            inputs = ((self.model_args, sampling_params, req) for req in requests)
             object_refs = [run_inference_one_model.remote(*x) for x in inputs]
             results = ray.get(object_refs)
             # Invoke ray.shutdown() to prevent hang-ups if subsequent calls required.
@@ -275,32 +390,32 @@ class VLLM(TemplateLM):
             # flatten results
             return undistribute(results)
 
-        outputs = self.model.generate(
-            prompt_token_ids=requests,
-            sampling_params=sampling_params,
-            use_tqdm=True if self.batch_size == "auto" else False,
-            lora_request=self.lora_request,
-        )
+        if self.lora_request is not None:
+            outputs = self.model.generate(
+                prompt_token_ids=requests,
+                sampling_params=sampling_params,
+                use_tqdm=True if self.batch_size == "auto" else False,
+                lora_request=self.lora_request,
+            )
+        else:
+            outputs = self.model.generate(
+                prompt_token_ids=requests,
+                sampling_params=sampling_params,
+                use_tqdm=True if self.batch_size == "auto" else False,
+            )
+            if outputs_thinking is not None:
+                for i, o in enumerate(outputs):
+                    assert len(o.outputs) == 1
+                    outputs[i].outputs[0].text = outputs_thinking[i].outputs[0].text + outputs[i].outputs[0].text
         return outputs
 
     def loglikelihood_rolling(
         self, requests: List[Instance], disable_tqdm: bool = False
     ) -> List[float]:
-        adaptive_batch_size = None
-        if self.batch_size == "auto":
-            adaptive_batch_size = len(requests)
+        loglikelihoods = []
 
-        # First, collect all windows from all requests
-        all_windows = []  # List of (request_idx, window) tuples
-        request_window_counts = []  # Track number of windows per request
-
-        for req_idx, (string,) in enumerate(
-            tqdm(
-                [req.args for req in requests],
-                disable=(disable_tqdm or (self.rank != 0)),
-            )
-        ):
-            rolling_token_windows: List[Tuple[List[int], List[int]]] = list(
+        for (string,) in tqdm([req.args for req in requests], disable=disable_tqdm):
+            rolling_token_windows = list(
                 map(
                     make_disjoint_window,
                     get_rolling_token_windows(
@@ -313,42 +428,20 @@ class VLLM(TemplateLM):
                 )
             )
 
-            # TODO: Right now, we pass single EOT token to the Encoder and the full context to the decoder, in seq2seq case
-            windows = [(None,) + x for x in rolling_token_windows]
+            rolling_token_windows = [(None,) + x for x in rolling_token_windows]
 
-            # Store windows with their request index
-            all_windows.extend((req_idx, window) for window in windows)
-            request_window_counts.append(len(windows))
-
-        all_nlls = []
-        batch_size = adaptive_batch_size or int(self.batch_size)
-        for i in range(0, len(all_windows), batch_size):
-            batch = all_windows[i : i + batch_size]
-            # Extract just the windows for processing, keeping track of request indices
-            batch_indices, batch_windows = zip(*batch)
-
-            batch_nlls = self._loglikelihood_tokens(
-                requests=batch_windows,
-                disable_tqdm=False,
+            string_nll = self._loglikelihood_tokens(
+                rolling_token_windows,
             )
-            # Store results with their request indices
-            all_nlls.extend(zip(batch_indices, batch_nlls))
 
-        # Reconstruct per-request loglikelihoods
-        loglikelihoods = []
-        current_idx = 0
-        for window_count in request_window_counts:
-            # Get all nlls for this request
-            request_nlls = all_nlls[current_idx : current_idx + window_count]
-            # Sum up the nlls for this request (discarding is_greedy)
-            request_total = sum(nll[0] for _, nll in request_nlls)
-            loglikelihoods.append(request_total)
-            current_idx += window_count
+            # discard is_greedy
+            string_nll = [x[0] for x in string_nll]
 
-            string = requests[len(loglikelihoods) - 1].args[0]
-            self.cache_hook.add_partial(
-                "loglikelihood_rolling", (string,), request_total
-            )
+            string_nll = sum(string_nll)
+            loglikelihoods.append(string_nll)
+
+            # cache this loglikelihood_rolling request
+            self.cache_hook.add_partial("loglikelihood_rolling", (string,), string_nll)
 
         return loglikelihoods
 
@@ -389,7 +482,6 @@ class VLLM(TemplateLM):
             desc="Running generate_until requests",
         )
         # for each different set of kwargs, we execute all requests, by batch.
-        eos = self.tokenizer.decode(self.eot_token_id)
         for chunk in chunks:
             context_and_encoding, all_gen_kwargs = zip(*chunk)
             context, context_encoding = zip(*context_and_encoding)
@@ -397,14 +489,27 @@ class VLLM(TemplateLM):
             # this is safe to assume because the `grouper` object ensures it.
             gen_kwargs = all_gen_kwargs[0]
             # unpack our keyword arguments.
+            until = None
             if isinstance(gen_kwargs, dict):
                 kwargs = copy.deepcopy(gen_kwargs)  # edge case for repeats > 1
-                # add EOS token to stop sequences
-                until = handle_stop_sequences(kwargs.pop("until", None), eos=eos)
+                if "until" in kwargs.keys():
+                    until = kwargs.pop("until")
+                    if isinstance(until, str):
+                        until = [until]
+                    elif not isinstance(until, list):
+                        raise ValueError(
+                            f"Expected `kwargs['until']` to be of type Union[str,list] but got {until}"
+                        )
             else:
                 raise ValueError(
-                    f"Expected `kwargs` to be of type `dict` but got {type(gen_kwargs)}"
+                    f"Expected `kwargs` to be of type `dict` but got {gen_kwargs}"
                 )
+            # add EOS token to stop sequences
+            eos = self.tokenizer.decode(self.eot_token_id)
+            if not until:
+                until = [eos]
+            else:
+                until.append(eos)
             if "max_gen_toks" in kwargs.keys():
                 max_gen_toks = kwargs.pop("max_gen_toks")
             else:
@@ -425,9 +530,23 @@ class VLLM(TemplateLM):
             )
 
             # cache generations
-            for output, context in zip(cont, context):
+            for i, (output, context) in tqdm(enumerate(zip(cont, context)), desc="final processing"):
                 generated_text = output.outputs[0].text
+                # swj hack
+                # from ipdb import set_trace as bp
+                # bp()
+                # check if "Answer:" in generated_text, if not resample cont = self._model_generate(requests=context_encoding, generate=True, max_tokens=max_gen_toks, stop=until, **kwargs) until it reaches "Answer:"
+                # max_attemp = 5
+                # while "Answer:" not in generated_text:
+                #     if max_attemp == 0:
+                #         print(f"max_attemp reached, question: {i}")
+                #         break
+                #     max_attemp -= 1
+                #     cont_new = self._model_generate(requests=[context_encoding[i]], generate=True, max_tokens=max_gen_toks, stop=until, **kwargs)
+                #     generated_text = cont_new[0].outputs[0].text
+                #     print(f"resample until 'Answer:', question: {i}")
                 res.append(generated_text)
+
                 self.cache_hook.add_partial(
                     "generate_until", (context, gen_kwargs), generated_text
                 )
@@ -559,7 +678,6 @@ class VLLM(TemplateLM):
     @staticmethod
     def modify_gen_kwargs(kwargs: dict) -> dict:
         # sampling_params
-        kwargs["temperature"] = kwargs.get("temperature", 0.0)
         do_sample = kwargs.pop("do_sample", None)
         if do_sample is False and "temperature" not in kwargs:
             eval_logger.debug(

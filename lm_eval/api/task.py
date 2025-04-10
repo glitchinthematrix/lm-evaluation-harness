@@ -48,6 +48,7 @@ ALL_OUTPUT_TYPES = [
     "generate_until",
 ]
 
+
 eval_logger = logging.getLogger(__name__)
 
 
@@ -272,7 +273,7 @@ class Task(abc.ABC):
             name=self.DATASET_NAME,
             data_dir=data_dir,
             cache_dir=cache_dir,
-            download_mode=download_mode,
+            download_mode=download_mode
         )
 
     @property
@@ -975,6 +976,9 @@ class ConfigurableTask(Task):
                 **(self.config.metadata or {}), **(self.config.dataset_kwargs or {})
             )
         else:
+            # print('dataset_kwargs', dataset_kwargs)
+            # print('dataset name', self.DATASET_NAME)
+            # print('dataset path', self.DATASET_PATH)
             self.dataset = datasets.load_dataset(
                 path=self.DATASET_PATH,
                 name=self.DATASET_NAME,

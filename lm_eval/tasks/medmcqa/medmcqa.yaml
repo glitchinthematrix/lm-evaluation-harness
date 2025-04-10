@@ -9,10 +9,3 @@ doc_to_target: cop
 doc_to_choice: [ 'A','B','C','D' ]
 should_decontaminate: true
 doc_to_decontamination_query: "{{question}}"
-metric_list:
-  - metric: acc
-    aggregation: mean
-    higher_is_better: true
-  - metric: acc_norm
-    aggregation: mean
-    higher_is_better: true

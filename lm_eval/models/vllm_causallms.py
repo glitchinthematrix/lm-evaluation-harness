@@ -1,4 +1,5 @@
 import copy
+import logging
 from importlib.metadata import version
 from importlib.util import find_spec
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
@@ -10,13 +11,16 @@ from tqdm import tqdm
 from lm_eval.api.instance import Instance
 from lm_eval.api.model import TemplateLM
 from lm_eval.api.registry import register_model
-from lm_eval.models.utils import Collator, configure_pad_token, undistribute
+from lm_eval.models.utils import (
+    Collator,
+    configure_pad_token,
+    handle_stop_sequences,
+    undistribute,
+)
 from lm_eval.utils import (
-    eval_logger,
     get_rolling_token_windows,
     make_disjoint_window,
 )
-
 
 try:
     import ray
@@ -28,8 +32,6 @@ except ModuleNotFoundError:
 
 if TYPE_CHECKING:
     pass
-
-eval_logger = eval_logger
 
 
 @register_model("vllm")
@@ -179,12 +181,12 @@ class VLLM(TemplateLM):
     def max_gen_toks(self):
         return self._max_gen_toks
 
-    def apply_chat_template(self, chat_history: List[Dict[str, str]]) -> str:
+    def apply_chat_template(self, chat_history: List[Dict[str, str]], add_generation_prompt: bool = True) -> str:
         """
         Method to apply a chat template to a list of chat history between user and model.
         """
         return self.tokenizer.apply_chat_template(
-            chat_history, tokenize=False, add_generation_prompt=True
+            chat_history, tokenize=False, add_generation_prompt=add_generation_prompt
         )
 
     @property
@@ -231,10 +233,12 @@ class VLLM(TemplateLM):
             if any(["thinking" in k for k in kwargs]):
                 print("Separating thinking and answering generation.")
                 thinking_start = kwargs.pop("thinking_start", "<|im_start|>think")
-                thinking_end = kwargs.pop("thinking_end", "<|im_start|>answer")
+                thinking_end = kwargs.pop("thinking_end", "<|im_start|>answer\n")
                 thinking_n_ignore = kwargs.pop("thinking_n_ignore", None)
-                thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str", None) # e.g. "Let me double check step-by-step.")
+                thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str",None) # e.g. "Let me double check step-by-step.")
                 if thinking_n_ignore_str is not None:
+                    if thinking_n_ignore_str == "hmm":
+                        thinking_n_ignore_str = "hmm, let me think again."
                     print(f"Thinking ignore string: {thinking_n_ignore_str}")
                     thinking_n_ignore_str_tok = self.tok_encode(thinking_n_ignore_str)
                 until_thinking = [kwargs.pop("until_thinking", "<|im_start|>")]
@@ -245,7 +249,7 @@ class VLLM(TemplateLM):
                 print(f"Thinking start: {thinking_start}, Thinking end: {thinking_end}, Stop: {until_thinking}")
                 thinking_start_tok = self.tok_encode(thinking_start)
                 thinking_end_tok = self.tok_encode(thinking_end)
-                thinking_end_max = thinking_end + "\nAnswer:"
+                thinking_end_max = thinking_end + "To summarize,"
                 thinking_end_max_tok = self.tok_encode(thinking_end_max)
                 newline_tok = self.tok_encode("\n")
                 # Cast to list to avoid `dictionary changed size during iteration`
@@ -347,17 +351,17 @@ class VLLM(TemplateLM):
                         if cont[-len(toks):] == toks:
                             cont = cont[:-len(toks)]
 
-                    if o.outputs[0].finish_reason == "length":
-                        # \n appears a lot so a decent chance it happend to just be the last token in which case we don't need to add a newline
-                        if (o.outputs[0].text[-1] == "\n") or (thinking_start[0] == "\n"):
-                            requests[i] += cont + thinking_end_max_tok
-                            outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end_max
-                        else:
-                            requests[i] += cont + newline_tok + thinking_end_max_tok
-                            outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + "\n" + thinking_end_max
+                   
+                    # \n appears a lot so a decent chance it happend to just be the last token in which case we don't need to add a newline
+                    if o.outputs[0].text[-1] == "\n":
+                        requests[i] += cont + thinking_end_max_tok
+                        outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end_max
                     else:
-                        requests[i] += cont + thinking_end_tok
-                        outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end
+                        requests[i] += cont + newline_tok + thinking_end_max_tok
+                        outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + "\n" + thinking_end_max
+                    # else:
+                    #     requests[i] += cont + thinking_end_max_tok
+                    #     outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end_max
 
             sampling_params = SamplingParams(max_tokens=max_tokens, stop=stop, **kwargs)
         else:

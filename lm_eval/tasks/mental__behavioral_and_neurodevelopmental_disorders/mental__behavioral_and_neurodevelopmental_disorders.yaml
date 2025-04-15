@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: mental__behavioral_and_neurodevelopmental_disorders
 dataset_path: glitchinthematrix/mental__behavioral_and_neurodevelopmental_disorders
 dataset_name: default

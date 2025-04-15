@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: diseases_of_the_eye_and_adnexa
 dataset_path: glitchinthematrix/diseases_of_the_eye_and_adnexa
 dataset_name: default

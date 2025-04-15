@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: endocrine__nutritional_and_metabolic_diseases
 dataset_path: glitchinthematrix/endocrine__nutritional_and_metabolic_diseases
 dataset_name: default

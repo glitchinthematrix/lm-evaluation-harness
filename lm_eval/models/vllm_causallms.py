@@ -238,7 +238,9 @@ class VLLM(TemplateLM):
                 thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str",None) # e.g. "Let me double check step-by-step.")
                 if thinking_n_ignore_str is not None:
                     if thinking_n_ignore_str == "hmm":
-                        thinking_n_ignore_str = "hmm, let me think again."
+                        thinking_n_ignore_str = "\nHmm, let me analyze this more thoroughly."
+                    elif thinking_n_ignore_str == "wait":
+                        thinking_n_ignore_str = "\nWait, let me double check."
                     print(f"Thinking ignore string: {thinking_n_ignore_str}")
                     thinking_n_ignore_str_tok = self.tok_encode(thinking_n_ignore_str)
                 until_thinking = [kwargs.pop("until_thinking", "<|im_start|>")]
@@ -249,7 +251,7 @@ class VLLM(TemplateLM):
                 print(f"Thinking start: {thinking_start}, Thinking end: {thinking_end}, Stop: {until_thinking}")
                 thinking_start_tok = self.tok_encode(thinking_start)
                 thinking_end_tok = self.tok_encode(thinking_end)
-                thinking_end_max = thinking_end + "To summarize,"
+                thinking_end_max = thinking_end + "My final answer is:"
                 thinking_end_max_tok = self.tok_encode(thinking_end_max)
                 newline_tok = self.tok_encode("\n")
                 # Cast to list to avoid `dictionary changed size during iteration`
@@ -684,9 +686,6 @@ class VLLM(TemplateLM):
         # sampling_params
         do_sample = kwargs.pop("do_sample", None)
         if do_sample is False and "temperature" not in kwargs:
-            eval_logger.debug(
-                "Got `do_sample=False` and no temperature value, setting VLLM temperature to 0.0 ..."
-            )
             kwargs["temperature"] = 0.0
         # hf defaults
         kwargs["skip_special_tokens"] = kwargs.get("skip_special_tokens", False)

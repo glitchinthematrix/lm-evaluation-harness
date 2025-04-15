@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: drugs__hormones_and_biological_mediators
 dataset_path: glitchinthematrix/drugs__hormones_and_biological_mediators
 dataset_name: default

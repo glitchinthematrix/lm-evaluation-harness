@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: certain_infectious_and_parasitic_diseases
 dataset_path: glitchinthematrix/certain_infectious_and_parasitic_diseases
 dataset_name: default

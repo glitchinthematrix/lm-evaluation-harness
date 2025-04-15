@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: congenital_anomalieschromosomal_abnormalities
 dataset_path: glitchinthematrix/congenital_anomalieschromosomal_abnormalities
 dataset_name: default

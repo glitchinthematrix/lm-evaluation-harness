@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: diseases_of_the_skin_and_subcutaneous_tissue
 dataset_path: glitchinthematrix/diseases_of_the_skin_and_subcutaneous_tissue
 dataset_name: default

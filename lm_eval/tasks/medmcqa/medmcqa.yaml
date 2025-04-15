@@ -1,11 +1,19 @@
 task: medmcqa
 dataset_path: medmcqa
-output_type: multiple_choice
+output_type: generate_until
 training_split: train
 validation_split: validation
 test_split: validation
+dataset_kwargs:
+  cache_dir: /projects/JHA/.cache/huggingface/datasets
+  download_mode: reuse_dataset_if_exists
 doc_to_text: !function utils_medmcqa.doc_to_text
 doc_to_target: cop
 doc_to_choice: [ 'A','B','C','D' ]
 should_decontaminate: true
 doc_to_decontamination_query: "{{question}}"
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 0
+  max_gen_toks: 32768

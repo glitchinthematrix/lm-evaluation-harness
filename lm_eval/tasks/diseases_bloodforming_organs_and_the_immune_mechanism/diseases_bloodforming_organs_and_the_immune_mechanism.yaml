@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: diseases_bloodforming_organs_and_the_immune_mechanism
 dataset_path: glitchinthematrix/diseases_bloodforming_organs_and_the_immune_mechanism
 dataset_name: default

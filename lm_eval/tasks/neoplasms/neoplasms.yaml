@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: neoplasms
 dataset_path: glitchinthematrix/neoplasms
 dataset_name: default

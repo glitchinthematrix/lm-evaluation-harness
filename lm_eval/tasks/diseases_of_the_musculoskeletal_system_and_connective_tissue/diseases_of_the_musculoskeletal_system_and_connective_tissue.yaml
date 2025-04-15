@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: diseases_of_the_musculoskeletal_system_and_connective_tissue
 dataset_path: glitchinthematrix/diseases_of_the_musculoskeletal_system_and_connective_tissue
 dataset_name: default

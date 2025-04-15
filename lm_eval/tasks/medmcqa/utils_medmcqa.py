@@ -17,8 +17,7 @@ def doc_to_text(doc) -> str:
         "D": choices[3],
     }
 
-    prompt = "Question: " + doc["question"] + "\nChoices:\n"
+    prompt = "Question: " + doc["question"] + "\nOptions:\n"
     for choice, option in option_choices.items():
         prompt += f"{choice.upper()}. {option}\n"
-    prompt += "Answer:"
     return prompt

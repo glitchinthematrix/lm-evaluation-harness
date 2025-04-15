@@ -1,3 +1,5 @@
+tag:
+    - icdbench
 task: diseases_of_the_ear_and_mastoid_process
 dataset_path: glitchinthematrix/diseases_of_the_ear_and_mastoid_process
 dataset_name: default

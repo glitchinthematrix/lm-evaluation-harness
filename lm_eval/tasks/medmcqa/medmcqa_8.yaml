@@ -1,0 +1,27 @@
+tag:
+  - qa_8
+task: medmcqa_8
+dataset_path: medmcqa
+output_type: generate_until
+training_split: train
+validation_split: validation
+test_split: validation
+dataset_kwargs:
+  cache_dir: /projects/JHA/.cache/huggingface/datasets
+  download_mode: reuse_dataset_if_exists
+doc_to_text: !function utils_medmcqa.doc_to_text
+doc_to_target: cop
+doc_to_choice: [ 'A','B','C','D' ]
+should_decontaminate: true
+doc_to_decontamination_query: "{{question}}"
+generation_kwargs:
+  until: []
+  do_sample: false
+  temperature: 1
+  max_gen_toks: 32768
+repeats: 8
+filter_list:
+  - name: "all" # Will do coverage, majority, and take_first_k
+    filter:
+      - function: "take_first_k"
+        k: 8

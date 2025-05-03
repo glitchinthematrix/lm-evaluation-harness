@@ -1,4 +1,6 @@
-task: mmlu_college_medicine
+tag: 
+  - mmlu_med_subset
+task: mmlu_college_medicine_custom
 dataset_path: brucewlee1/mmlu-college-medicine
 dataset_name: default
 dataset_kwargs:

@@ -10,4 +10,4 @@ def doc_to_text(doc) -> str:
 
 
 def doc_to_target(doc) -> int:
-    return doc["label"]
+    return doc["label"] 

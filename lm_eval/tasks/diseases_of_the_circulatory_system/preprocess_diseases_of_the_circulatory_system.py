@@ -3,4 +3,11 @@ def doc_to_text(doc):
     return f"Question: {doc['question']}\n Options:\n{doc['options']}"
 
 def doc_to_target(doc):
-    return doc['answer']
+    if doc['answer'] == 'A':
+        return 0
+    elif doc['answer'] == 'B':
+        return 1
+    elif doc['answer'] == 'C':
+        return 2
+    elif doc['answer'] == 'D':
+        return 3

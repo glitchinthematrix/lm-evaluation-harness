@@ -12,5 +12,5 @@ doc_to_choice: [ 'A', 'B', 'C', 'D' ]
 generation_kwargs:
   until: []
   do_sample: false
-  temperature: 0
+  temperature: 0.0
   max_gen_toks: 32768

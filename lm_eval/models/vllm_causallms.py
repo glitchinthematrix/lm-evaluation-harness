@@ -238,11 +238,9 @@ class VLLM(TemplateLM):
                 thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str",None) # e.g. "Let me double check step-by-step.")
                 if thinking_n_ignore_str is not None:
                     if thinking_n_ignore_str == "hmm":
-                        thinking_n_ignore_str = "\nHmm, let me analyze this more thoroughly."
-                    elif thinking_n_ignore_str == "wait":
-                        thinking_n_ignore_str = "\nWait, let me double check."
+                        thinking_n_ignore_strs = ["\nhmm, let's double check:",  "\nhmm,let's make sure we're on the right track:", "\nhmm, let's be careful and sum it up:", "\nhmm, let's think again:", "\nhmm, almost there, one final check:"]
                     print(f"Thinking ignore string: {thinking_n_ignore_str}")
-                    thinking_n_ignore_str_tok = self.tok_encode(thinking_n_ignore_str)
+                    thinking_n_ignore_str_toks = [self.tok_encode(s) for s in thinking_n_ignore_strs]
                 until_thinking = [kwargs.pop("until_thinking", "<|im_start|>")]
                 if "until_thinking_2" in kwargs:
                     until_thinking.append(kwargs.pop("until_thinking_2"))
@@ -251,7 +249,7 @@ class VLLM(TemplateLM):
                 print(f"Thinking start: {thinking_start}, Thinking end: {thinking_end}, Stop: {until_thinking}")
                 thinking_start_tok = self.tok_encode(thinking_start)
                 thinking_end_tok = self.tok_encode(thinking_end)
-                thinking_end_max = thinking_end + "My final answer is:"
+                thinking_end_max = thinking_end + ""
                 thinking_end_max_tok = self.tok_encode(thinking_end_max)
                 newline_tok = self.tok_encode("\n")
                 # Cast to list to avoid `dictionary changed size during iteration`
@@ -319,8 +317,8 @@ class VLLM(TemplateLM):
                                         cont = cont[:-len(toks)]
                                 
                                 if thinking_n_ignore_str is not None:
-                                    cont += thinking_n_ignore_str_tok
-                                    o.outputs[0].text += thinking_n_ignore_str
+                                    cont += thinking_n_ignore_str_toks[min(i, len(thinking_n_ignore_str_toks) - 1)]
+                                    o.outputs[0].text += thinking_n_ignore_strs[min(i, len(thinking_n_ignore_str_toks) - 1)]
 
                                 if outputs_thinking[idx] is not None:
                                     outputs_thinking[idx].outputs[0].text += o.outputs[0].text
@@ -353,8 +351,7 @@ class VLLM(TemplateLM):
                         if cont[-len(toks):] == toks:
                             cont = cont[:-len(toks)]
 
-                   
-                    # \n appears a lot so a decent chance it happend to just be the last token in which case we don't need to add a newline
+                  
                     if o.outputs[0].text[-1] == "\n":
                         requests[i] += cont + thinking_end_max_tok
                         outputs_thinking[i].outputs[0].text = thinking_start + outputs_thinking[i].outputs[0].text + thinking_end_max

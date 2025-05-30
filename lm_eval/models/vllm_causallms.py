@@ -5,7 +5,7 @@ from importlib.util import find_spec
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union
 
 from more_itertools import distribute
-from packaging.version import parse as parse_version
+from packaging.version import parse as parse_versionUp
 from tqdm import tqdm
 
 from lm_eval.api.instance import Instance
@@ -232,8 +232,8 @@ class VLLM(TemplateLM):
             outputs_thinking = None
             if any(["thinking" in k for k in kwargs]):
                 print("Separating thinking and answering generation.")
-                thinking_start = kwargs.pop("thinking_start", "<|im_start|>think")
-                thinking_end = kwargs.pop("thinking_end", "<|im_start|>answer\n")
+                thinking_start = kwargs.pop("thinking_start", "<think>\n")
+                thinking_end = kwargs.pop("thinking_end", "</think>")
                 thinking_n_ignore = kwargs.pop("thinking_n_ignore", None)
                 thinking_n_ignore_str = kwargs.pop("thinking_n_ignore_str",None) # e.g. "Let me double check step-by-step.")
                 if thinking_n_ignore_str is not None:
@@ -241,7 +241,7 @@ class VLLM(TemplateLM):
                         thinking_n_ignore_strs = ["\nhmm, let's double check:",  "\nhmm,let's make sure we're on the right track:", "\nhmm, let's be careful and sum it up:", "\nhmm, let's think again:", "\nhmm, almost there, one final check:"]
                     print(f"Thinking ignore string: {thinking_n_ignore_str}")
                     thinking_n_ignore_str_toks = [self.tok_encode(s) for s in thinking_n_ignore_strs]
-                until_thinking = [kwargs.pop("until_thinking", "<|im_start|>")]
+                until_thinking = [kwargs.pop("until_thinking", "</think>")]
                 if "until_thinking_2" in kwargs:
                     until_thinking.append(kwargs.pop("until_thinking_2"))
                 if stop is not None:
@@ -249,7 +249,7 @@ class VLLM(TemplateLM):
                 print(f"Thinking start: {thinking_start}, Thinking end: {thinking_end}, Stop: {until_thinking}")
                 thinking_start_tok = self.tok_encode(thinking_start)
                 thinking_end_tok = self.tok_encode(thinking_end)
-                thinking_end_max = thinking_end + ""
+                thinking_end_max = thinking_end + "\nFinal Answer:"
                 thinking_end_max_tok = self.tok_encode(thinking_end_max)
                 newline_tok = self.tok_encode("\n")
                 # Cast to list to avoid `dictionary changed size during iteration`

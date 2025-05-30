@@ -1,6 +1,6 @@
 
 def doc_to_text(doc):
-    return f"Question: {doc['question']}\n Options:\n{doc['options']}"
+    return f"Question: {doc['question']}\n Options:\n{doc['options']}.\nPlease only output the choice letter in the answer field e.g. Final Answer: A"
 
 def doc_to_target(doc):
     if doc['answer'] == 'A':

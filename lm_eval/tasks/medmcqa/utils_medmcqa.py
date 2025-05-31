@@ -20,4 +20,4 @@ def doc_to_text(doc) -> str:
     prompt = "Question: " + doc["question"] + "\nOptions:\n"
     for choice, option in option_choices.items():
         prompt += f"{choice.upper()}. {option}\n"
-    return prompt
+    return prompt+"\nPlease only output the choice letter in the answer field e.g. Final Answer: A"

@@ -1,7 +1,7 @@
 def doc_to_text(doc) -> str:
     ctxs = "\n".join(doc["CONTEXTS"])
     options = '\nA. Yes\nB. No\nC. Maybe'
-    return "Abstract: {}\nQuestion: {}\nOptions: {}".format(
+    return "Abstract: {}\nQuestion: {}\nOptions: {}\nPlease only output the choice letter in the answer field e.g. Final Answer: A".format(
         ctxs,
         doc["QUESTION"],
         options,
